@@ -1,0 +1,105 @@
+<!doctype html>
+<html>
+  <head>
+    <title>The Narrator</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="index.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "@google/genai": "https://esm.sh/@google/genai@^0.7.0",
+          "marked": "https://esm.sh/marked@^15.0.7"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main>
+      <div id="chat-header">
+        <h1 id="chat-title"></h1>
+        <div id="chat-actions">
+          <button id="settings-btn" title="Customize AI Persona" disabled>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="12" cy="12" r="3"></circle>
+              <path
+                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"
+              ></path>
+            </svg>
+          </button>
+          <button id="new-chat-btn" title="Start a new story">New Story</button>
+          <div class="dropdown">
+            <button id="saved-chats-btn" title="View your saved stories">
+              My Stories
+            </button>
+            <div id="saved-chats-list" class="dropdown-content">
+              <!-- Populated by JS -->
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="chat-container">
+        <div id="initial-message">
+          <h2>Welcome to The Narrator!</h2>
+          <p>
+            Click "New Story" to begin an adventure, or select one of your
+            saved tales from "My Stories".
+          </p>
+        </div>
+      </div>
+      <form id="chat-form">
+        <input
+          id="chat-input"
+          type="text"
+          placeholder="Type your message..."
+          autocomplete="off"
+          aria-label="Chat message input"
+        />
+        <button type="submit" id="send-button" aria-label="Send message">
+          Send
+        </button>
+      </form>
+    </main>
+
+    <div id="settings-modal" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Customize AI Persona</h2>
+          <button
+            id="close-modal-btn"
+            class="close-btn"
+            aria-label="Close settings"
+          >
+            &times;
+          </button>
+        </div>
+        <div class="modal-body">
+          <label for="system-instruction-input"
+            >This instruction guides the AI's personality and response style
+            for the current story.</label
+          >
+          <textarea
+            id="system-instruction-input"
+            rows="6"
+            placeholder="e.g., You are a friendly pirate captain telling tales of the high seas."
+          ></textarea>
+        </div>
+        <div class="modal-footer">
+          <button id="cancel-settings-btn" class="secondary-btn">Cancel</button>
+          <button id="save-settings-btn">Save Changes</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="index.tsx"></script>
+  </body>
+</html>
