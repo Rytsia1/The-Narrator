@@ -16,7 +16,10 @@
   <body>
     <main>
       <div id="chat-header">
-        <h1 id="chat-title"></h1>
+        <div class="title-wrapper">
+          <h1 id="chat-title"></h1>
+          <span id="save-status"></span>
+        </div>
         <div id="chat-actions">
           <button id="settings-btn" title="Customize AI Persona" disabled>
             <svg
@@ -51,9 +54,30 @@
         <div id="initial-message">
           <h2>Welcome to The Narrator!</h2>
           <p>
-            Click "New Story" to begin an adventure, or select one of your
-            saved tales from "My Stories".
+            Begin your adventure by writing the first line of your story below.
           </p>
+          <form id="initial-chat-form">
+            <div id="genre-container">
+              <label for="genre-selection">Choose a Genre:</label>
+              <div id="genre-selection">
+                <button type="button" class="genre-btn selected" data-genre="Default">Default</button>
+                <button type="button" class="genre-btn" data-genre="Fantasy">Fantasy</button>
+                <button type="button" class="genre-btn" data-genre="Sci-Fi">Sci-Fi</button>
+                <button type="button" class="genre-btn" data-genre="Mystery">Mystery</button>
+                <button type="button" class="genre-btn" data-genre="Custom">Custom</button>
+              </div>
+              <div id="custom-genre-wrapper" style="display: none;">
+                <input type="text" id="custom-genre-input" placeholder="e.g., Cyberpunk Noir, Whimsical Fable" />
+              </div>
+            </div>
+            <textarea
+              id="initial-prompt-input"
+              rows="4"
+              placeholder="e.g., A curious robot discovered a hidden garden on Mars..."
+              aria-label="Initial story prompt"
+            ></textarea>
+            <button type="submit" id="start-weaving-btn">Start Weaving</button>
+          </form>
         </div>
       </div>
       <form id="chat-form">

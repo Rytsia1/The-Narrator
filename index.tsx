@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { GoogleGenAI, Chat, Content } from '@google/genai';
+import { GoogleGenAI, Content, Type } from '@google/genai';
 import * as marked from 'marked';
 
 // --- Constants ---
@@ -51,17 +51,66 @@ const saveSettingsBtn = document.getElementById(
 const cancelSettingsBtn = document.getElementById(
   'cancel-settings-btn'
 ) as HTMLButtonElement;
+const initialChatForm = document.getElementById(
+  'initial-chat-form'
+) as HTMLFormElement;
+const initialPromptInput = document.getElementById(
+  'initial-prompt-input'
+) as HTMLTextAreaElement;
+const startWeavingBtn = document.getElementById(
+  'start-weaving-btn'
+) as HTMLButtonElement;
+const saveStatusElement = document.getElementById(
+  'save-status'
+) as HTMLSpanElement;
+const genreSelection = document.getElementById(
+  'genre-selection'
+) as HTMLDivElement;
+const customGenreWrapper = document.getElementById(
+  'custom-genre-wrapper'
+) as HTMLDivElement;
+const customGenreInput = document.getElementById(
+  'custom-genre-input'
+) as HTMLInputElement;
 
 // --- App State ---
-let currentChat: Chat | null = null;
+let ai: GoogleGenAI;
+let currentHistory: Content[] = [];
 let currentChatTitle: string | null = null;
 let currentSystemInstruction: string = DEFAULT_SYSTEM_INSTRUCTION;
+let saveTimeoutId: number;
 
 // --- Helper Functions ---
 
 interface ChatData {
   history: Content[];
   systemInstruction: string;
+}
+
+function scheduleSave() {
+  // Clear any pending save
+  clearTimeout(saveTimeoutId);
+  saveStatusElement.classList.remove('visible');
+  saveStatusElement.textContent = '';
+
+  // Schedule a new save after 1.5 seconds of inactivity
+  saveTimeoutId = window.setTimeout(() => {
+    if (!currentChatTitle) return;
+
+    saveStatusElement.textContent = 'Saving...';
+    saveStatusElement.classList.add('visible');
+
+    saveChatData(currentChatTitle, currentHistory, currentSystemInstruction);
+
+    // Give feedback that save is complete
+    setTimeout(() => {
+      saveStatusElement.textContent = 'Saved';
+      // Keep "Saved" for a bit, then fade out
+      setTimeout(() => {
+        saveStatusElement.classList.remove('visible');
+      }, 2000);
+    }, 300); // Short delay to make "Saving..." noticeable
+  }, 1500);
 }
 
 function getChatData(title: string): ChatData {
@@ -107,13 +156,18 @@ function saveChatData(
 
 function appendMessage(
   content: string,
-  sender: 'user' | 'model' | 'loading'
+  sender: 'user' | 'model' | 'loading',
+  suggestions?: string[]
 ) {
-  // Before adding a new message, remove any existing regenerate buttons
+  // Before adding a new message, remove any existing regenerate/quick-reply buttons
   document.querySelector('.regenerate-button')?.parentElement?.remove();
+  document.querySelector('.quick-replies')?.remove();
 
   const messageDiv = document.createElement('div');
-  messageDiv.classList.add('message');
+  messageDiv.classList.add(
+    'message',
+    sender === 'user' ? 'user-message-container' : 'model-message-container'
+  );
 
   if (sender === 'loading') {
     messageDiv.classList.add('loading');
@@ -171,10 +225,28 @@ function appendMessage(
       });
       actionsContainer.appendChild(regenerateButton);
 
-      messageDiv.appendChild(actionsContainer);
+      contentContainer.appendChild(actionsContainer);
     }
   }
   chatContainer.appendChild(messageDiv);
+
+  if (sender === 'model' && suggestions && suggestions.length > 0) {
+    const repliesContainer = document.createElement('div');
+    repliesContainer.className = 'quick-replies';
+
+    for (const suggestion of suggestions) {
+      const button = document.createElement('button');
+      button.className = 'quick-reply-btn';
+      button.textContent = suggestion;
+      button.onclick = () => {
+        sendMessage(suggestion);
+        repliesContainer.remove();
+      };
+      repliesContainer.appendChild(button);
+    }
+    chatContainer.appendChild(repliesContainer);
+  }
+
   chatContainer.scrollTop = chatContainer.scrollHeight;
   return messageDiv;
 }
@@ -258,79 +330,164 @@ function showInitialState() {
   chatContainer.innerHTML = ''; // Clear any previous messages
   chatContainer.appendChild(initialMessage);
   settingsBtn.disabled = true;
-  currentChat = null;
+  currentHistory = [];
   currentChatTitle = null;
   localStorage.removeItem(CURRENT_CHAT_KEY);
+  // Reset initial form
+  if (initialPromptInput) initialPromptInput.value = '';
+  if (startWeavingBtn) {
+    startWeavingBtn.disabled = false;
+    startWeavingBtn.innerHTML = 'Start Weaving';
+  }
+  // Reset genre selection
+  genreSelection.querySelectorAll('.genre-btn').forEach((btn) => {
+    const button = btn as HTMLButtonElement;
+    if (button.dataset.genre === 'Default') {
+      button.classList.add('selected');
+    } else {
+      button.classList.remove('selected');
+    }
+  });
+  customGenreWrapper.style.display = 'none';
+  customGenreInput.value = '';
+
+  // Clear any pending saves and hide status
+  clearTimeout(saveTimeoutId);
+  if (saveStatusElement) {
+    saveStatusElement.classList.remove('visible');
+    saveStatusElement.textContent = '';
+  }
 }
 
 // --- Core App Logic ---
 
+async function generateTitle(prompt: string, genre: string): Promise<string> {
+  try {
+    const titlePrompt =
+      genre === 'Default' || genre === ''
+        ? `Generate a concise, evocative story title (max 5 words) for this prompt: "${prompt}". Respond with only the title, no extra text or quotes.`
+        : `Generate a concise, evocative ${genre} story title (max 5 words) for this prompt: "${prompt}". Respond with only the title, no extra text or quotes.`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: titlePrompt,
+    });
+    let title = response.text.trim().replace(/"/g, '');
+
+    if (!title) {
+      throw new Error('Generated title was empty.');
+    }
+
+    // Ensure title is unique
+    const savedChats = getSavedChats();
+    let finalTitle = title;
+    let counter = 2;
+    while (savedChats.includes(finalTitle)) {
+      finalTitle = `${title} ${counter}`;
+      counter++;
+    }
+    return finalTitle;
+  } catch (error) {
+    console.error('Failed to generate title:', error);
+    // Fallback title
+    return `Story from ${new Date().toLocaleDateString()}`;
+  }
+}
+
 async function sendMessage(userMessage: string) {
-  if (!currentChat || !currentChatTitle) return;
+  if (!currentChatTitle) return;
+
+  // Remove any existing quick replies when a new message is sent
+  document.querySelector('.quick-replies')?.remove();
 
   appendMessage(userMessage, 'user');
   const loadingIndicator = appendMessage('', 'loading');
 
-  try {
-    const response = await currentChat.sendMessage({ message: userMessage });
-    loadingIndicator.remove();
-    appendMessage(response.text, 'model');
+  currentHistory.push({ role: 'user', parts: [{ text: userMessage }] });
+  scheduleSave(); // Schedule save after user message is added to history
 
-    const updatedHistory = await currentChat.getHistory();
-    saveChatData(
-      currentChatTitle,
-      updatedHistory,
-      currentSystemInstruction
-    );
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      story_part: {
+        type: Type.STRING,
+        description:
+          'The next part of the story, continuing from the user prompt.',
+      },
+      suggestions: {
+        type: Type.ARRAY,
+        items: { type: Type.STRING },
+        description:
+          'Three short (3-5 word) and engaging suggestions for how the user could continue the story. These should be distinct and offer different paths.',
+      },
+    },
+    required: ['story_part', 'suggestions'],
+  };
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: currentHistory,
+      config: {
+        systemInstruction: `${currentSystemInstruction}\n\nIMPORTANT: Your entire response must be a single JSON object matching the defined schema. Do not include any other text, markdown, or formatting. The 'story_part' should be the creative story content, and 'suggestions' must be an array of three distinct strings.`,
+        responseMimeType: 'application/json',
+        responseSchema: responseSchema,
+      },
+    });
+
+    loadingIndicator.remove();
+
+    let storyPart = '';
+    let suggestions: string[] = [];
+    try {
+      const jsonResponse = JSON.parse(response.text);
+      storyPart =
+        jsonResponse.story_part ||
+        `Error: The model's response was not in the correct format. Here is the raw response: ${response.text}`;
+      suggestions = jsonResponse.suggestions || [];
+    } catch (e) {
+      console.warn(
+        'Response was not valid JSON, treating as plain text.',
+        response.text
+      );
+      storyPart = response.text;
+    }
+
+    if (!storyPart) {
+      throw new Error("API response is missing 'story_part'.");
+    }
+
+    appendMessage(storyPart, 'model', suggestions);
+
+    currentHistory.push({ role: 'model', parts: [{ text: storyPart }] });
+    scheduleSave(); // Schedule save after model response is added
   } catch (error) {
     handleApiError(error, loadingIndicator);
   }
 }
 
 async function regenerateLastResponse() {
-  if (!currentChat || !currentChatTitle) return;
+  if (currentHistory.length < 2) return;
 
-  // 1. Get history and identify the last turn.
-  const fullHistory = await currentChat.getHistory();
-  if (
-    fullHistory.length < 2 ||
-    fullHistory[fullHistory.length - 1].role !== 'model'
-  ) {
-    return; // Cannot regenerate if the last message isn't from the model.
-  }
+  // 1. Update the DOM by removing the last user and model messages & replies.
+  const modelMessages = document.querySelectorAll('.model-message-container');
+  modelMessages[modelMessages.length - 1]?.remove();
+  const userMessages = document.querySelectorAll('.user-message-container');
+  userMessages[userMessages.length - 1]?.remove();
+  document.querySelector('.quick-replies')?.remove();
 
-  const lastUserMessageContent = fullHistory[fullHistory.length - 2].parts
-    .map((p) => p.text)
-    .join('');
-  const historyWithoutLastTurn = fullHistory.slice(0, -2);
+  // 2. Remove the last turn from history.
+  currentHistory.pop(); // remove model response
+  const lastUserTurn = currentHistory.pop(); // remove user message
+  if (!lastUserTurn) return;
 
-  // 2. Update the DOM by removing the last user and model messages.
-  document
-    .querySelector('.model-message:last-of-type')
-    ?.closest('.message')
-    ?.remove();
-  document
-    .querySelector('.user-message:last-of-type')
-    ?.closest('.message')
-    ?.remove();
+  const lastUserMessage = lastUserTurn.parts.map((p) => p.text).join('');
 
-  // 3. Re-initialize the chat with the truncated history.
-  const ai = new GoogleGenAI({ apiKey: API_KEY as string });
-  currentChat = ai.chats.create({
-    model: 'gemini-flash-lite-latest',
-    history: historyWithoutLastTurn,
-    config: {
-      systemInstruction: currentSystemInstruction,
-    },
-  });
-
-  // 4. Re-send the last user message to get a new response.
-  await sendMessage(lastUserMessageContent);
+  // 3. Re-send the last user message to get a new response.
+  await sendMessage(lastUserMessage);
 }
 
 async function loadChat(title: string) {
-  if (!API_KEY) return;
-
   currentChatTitle = title;
   localStorage.setItem(CURRENT_CHAT_KEY, title);
   chatTitleElement.textContent = title;
@@ -341,54 +498,38 @@ async function loadChat(title: string) {
 
   const { history, systemInstruction } = getChatData(title);
   currentSystemInstruction = systemInstruction;
-
-  const ai = new GoogleGenAI({ apiKey: API_KEY });
-  currentChat = ai.chats.create({
-    model: 'gemini-flash-lite-latest',
-    history: history,
-    config: {
-      systemInstruction: currentSystemInstruction,
-    },
-  });
+  currentHistory = history;
 
   for (const message of history) {
     const text = message.parts.map((part) => part.text).join('');
     appendMessage(text, message.role as 'user' | 'model');
   }
 
+  // The very first message in a new chat has no suggestions
   if (history.length === 0) {
     appendMessage(
       'Greetings, traveler! What story shall we weave today? Give me a prompt, and a tale will unfold.',
       'model'
     );
+  } else {
+    // For existing chats, we need to generate suggestions for the last message
+    const lastMessage = history[history.length - 1];
+    if (lastMessage && lastMessage.role === 'model') {
+      // To provide a consistent experience, we could regenerate suggestions here,
+      // but for simplicity, we'll only show them on new messages.
+    }
   }
+
   settingsBtn.disabled = false;
 }
 
 function startNewChat() {
-  const title = prompt(
-    'Enter a title for your new story:',
-    'My Magical Adventure'
-  );
-  if (!title || title.trim() === '') {
-    alert('Story title cannot be empty.');
-    return;
-  }
-  const trimmedTitle = title.trim();
-  if (getSavedChats().includes(trimmedTitle)) {
-    alert('A story with this title already exists. Please choose another.');
-    return;
-  }
-
-  saveNewChatTitle(trimmedTitle);
-  saveChatData(trimmedTitle, [], DEFAULT_SYSTEM_INSTRUCTION);
-  updateSavedChatsDropdown();
-  loadChat(trimmedTitle);
+  showInitialState();
 }
 
 // --- Modal Logic ---
 function openSettingsModal() {
-  if (!currentChat) return;
+  if (!currentChatTitle) return;
   systemInstructionInput.value = currentSystemInstruction;
   settingsModal.classList.add('show');
 }
@@ -398,7 +539,7 @@ function closeSettingsModal() {
 }
 
 async function saveSettings() {
-  if (!currentChat || !currentChatTitle) return;
+  if (!currentChatTitle) return;
 
   const newInstruction = systemInstructionInput.value.trim();
   if (!newInstruction) {
@@ -408,12 +549,8 @@ async function saveSettings() {
 
   currentSystemInstruction = newInstruction;
 
-  const history = await currentChat.getHistory();
-  saveChatData(currentChatTitle, history, currentSystemInstruction);
-
-  // Re-initialize the chat with the new instruction.
-  await loadChat(currentChatTitle);
-
+  saveChatData(currentChatTitle, currentHistory, currentSystemInstruction);
+  await loadChat(currentChatTitle); // Reload to apply changes immediately
   closeSettingsModal();
 }
 
@@ -422,7 +559,6 @@ async function saveSettings() {
 async function initializeApp() {
   if (!API_KEY) {
     showInitialState();
-    // The initial-message div is hidden by default, so we need to manually add the error message
     const errorContainer = document.createElement('div');
     chatContainer.appendChild(errorContainer);
     appendMessage(
@@ -431,6 +567,8 @@ async function initializeApp() {
     );
     return;
   }
+
+  ai = new GoogleGenAI({ apiKey: API_KEY as string });
 
   // Event Listeners
   newChatBtn.addEventListener('click', startNewChat);
@@ -449,6 +587,60 @@ async function initializeApp() {
     e.stopPropagation();
     updateSavedChatsDropdown();
     savedChatsList.classList.toggle('show');
+  });
+
+  genreSelection.addEventListener('click', (e) => {
+    const target = e.target as HTMLElement;
+    if (target.classList.contains('genre-btn')) {
+      genreSelection
+        .querySelectorAll('.genre-btn')
+        .forEach((btn) => btn.classList.remove('selected'));
+      target.classList.add('selected');
+
+      const genre = target.dataset.genre;
+      if (genre === 'Custom') {
+        customGenreWrapper.style.display = 'block';
+        customGenreInput.focus();
+      } else {
+        customGenreWrapper.style.display = 'none';
+      }
+    }
+  });
+
+  initialChatForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const userMessage = initialPromptInput.value.trim();
+    if (!userMessage) {
+      alert('Please enter a prompt to start your story.');
+      return;
+    }
+
+    startWeavingBtn.disabled = true;
+    startWeavingBtn.innerHTML =
+      '<span class="spinner"></span>Starting Story...';
+
+    // Get genre
+    const selectedGenreBtn = genreSelection.querySelector(
+      '.genre-btn.selected'
+    ) as HTMLButtonElement;
+    let genre = selectedGenreBtn.dataset.genre || 'Default';
+    if (genre === 'Custom') {
+      genre = customGenreInput.value.trim() || 'Default';
+    }
+
+    // Create system instruction
+    const systemInstruction =
+      genre === 'Default' || genre === ''
+        ? DEFAULT_SYSTEM_INSTRUCTION
+        : `You are a master storyteller specializing in ${genre}. Your goal is to weave imaginative and engaging tales for the user. When the user gives you a prompt, turn it into a captivating story in the ${genre} style.`;
+
+    const title = await generateTitle(userMessage, genre);
+    saveNewChatTitle(title);
+    saveChatData(title, [], systemInstruction);
+    updateSavedChatsDropdown();
+    await loadChat(title);
+    // The first message is now the user's initial prompt
+    await sendMessage(userMessage);
   });
 
   chatForm.addEventListener('submit', async (e) => {
